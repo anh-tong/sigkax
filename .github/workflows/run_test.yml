@@ -34,4 +34,4 @@ jobs:
       run: |
         python setup.py build_ext --inplace
         python -m pip install .
-        python -m pytest --duration=0
+        python -m pytest --durations=0
