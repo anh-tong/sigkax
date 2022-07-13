@@ -4,7 +4,7 @@ from platform import platform
 import numpy as np
 
 import jax.numpy as jnp
-from jax import core, dtypes, lax
+from jax import core, dtypes
 from jaxlib import xla_client
 from jax.abstract_arrays import ShapedArray
 from jax.interpreters import xla
@@ -98,19 +98,3 @@ xla.backend_specific_translations["cpu"][_solve_pde_prim] = partial(
 
 xla.backend_specific_translations["gpu"][_solve_pde_prim] = partial(
     _solve_pde_translation, platform="gpu")
-
-if __name__ == "__main__":
-
-    import jax
-    
-    input = jnp.ones((3,2)) * 0.1
-    output_cpu = jax.jit(solve_pde, backend="cpu")(input)
-    output_gpu = jax.jit(solve_pde, backend="gpu")(input)
-
-    output_cpu = np.array(output_cpu)
-    output_gpu = np.array(output_gpu)
-    
-    print(output_cpu)
-    print(output_gpu)
-    
-    print(np.abs(output_cpu - output_gpu).sum())

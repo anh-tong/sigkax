@@ -1,7 +1,6 @@
 
 #include "kernel_helpers.h"
 #include "cuda_kernel.h"
-// #include <cuda.h>
 
 namespace sigkax
 {
@@ -43,7 +42,6 @@ namespace sigkax
                     k01_idx = (i - 1) * (n_cols + 1) + j;
                     k10_idx = i * (n_cols + 1) + (j - 1);
                     k11_idx = i * (n_cols + 1) + j;
-                    printf("%d\n", k11_idx);
 
                     inc = inc_arr[inc_idx];
                     k00 = sol_arr[k00_idx];
