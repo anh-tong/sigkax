@@ -1,5 +1,4 @@
-# This workflow will install Python dependencies, run tests and lint with a variety of Python versions
-# For more information see: https://help.github.com/actions/language-and-framework-guides/using-python-with-github-actions
+# Continuous integration
 
 name: Python package
 
@@ -17,6 +16,7 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.8", "3.9", "3.10"]
+        enable-cuda: ["yes", "no]
 
     steps:
     - uses: actions/checkout@v3
@@ -31,7 +31,10 @@ jobs:
         python -m pip install pytest pybind11 numpy jaxlib
         
     - name: Test with pytest
+      env:
+        SIGKAX_CUDA: ${{ matrix.enable-cuda}}
       run: |
+        echo "SIGKAX_CUDA=$SIGKAX_CUDA"
         python setup.py build_ext --inplace
         python -m pip install .
         python -m pytest --durations=0
