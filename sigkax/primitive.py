@@ -11,6 +11,14 @@ from jax.interpreters import xla
 
 from sigkax import cpu_ops
 
+try:
+    from sigkax import gpu_ops
+except ImportError:
+    gpu_ops == None
+else:
+    for name, value in gpu_ops.registrations().items():
+        xla_client.register_custom_call_target(name, value, platform="gpu")
+
 for name, value in cpu_ops.registrations().items():
     xla_client.register_cpu_custom_call_target(name, value)
 
@@ -43,7 +51,22 @@ def _solve_pde_translation(ctx,
         raise NotImplementedError(f"dtype {dtype} is not supported")
 
     if platform == "gpu":
-        raise NotImplementedError
+        if gpu_ops is None:
+            raise RuntimeError(
+                "Primitive of `sigkax` was not compiled yet.\
+                    Please check if the system support CUDA"
+            )
+        
+        opaque = gpu_ops.build_sigkax_descriptor(dims[0], dims[1])
+        return xla_client.ops.CustomCallWithLayout(
+            ctx,
+            op_name,
+            operands=(inc_mat,),
+            operand_shapes_with_layout=(input_shape,),
+            shape_with_layout=output_shape,
+            opaque=opaque,
+        )
+
     elif platform == "cpu":
         return xla_client.ops.CustomCallWithLayout(
             ctx,
@@ -73,9 +96,21 @@ _solve_pde_prim.def_abstract_eval(_solve_pde_abstract)
 xla.backend_specific_translations["cpu"][_solve_pde_prim] = partial(
     _solve_pde_translation, platform="cpu")
 
+xla.backend_specific_translations["gpu"][_solve_pde_prim] = partial(
+    _solve_pde_translation, platform="gpu")
+
 if __name__ == "__main__":
 
-    inc_mat = np.ones((2, 2))
     import jax
-    output = jax.jit(solve_pde, backend="cpu")(inc_mat)
-    print(output)
+    
+    input = jnp.ones((3,2)) * 0.1
+    output_cpu = jax.jit(solve_pde, backend="cpu")(input)
+    output_gpu = jax.jit(solve_pde, backend="gpu")(input)
+
+    output_cpu = np.array(output_cpu)
+    output_gpu = np.array(output_gpu)
+    
+    print(output_cpu)
+    print(output_gpu)
+    
+    print(np.abs(output_cpu - output_gpu).sum())

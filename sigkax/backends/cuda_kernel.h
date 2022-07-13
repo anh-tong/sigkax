@@ -8,6 +8,11 @@
 
 namespace sigkax
 {
+#ifdef __CUDACC__
+#define SIGKAX_INLINE_OR_DEVICE __host__ __device__
+#else
+#define SIGKAX_INLINE_OR_DEVICE inline
+#endif
     struct Descriptor
     {
         /* define struct of number of rows and columns
