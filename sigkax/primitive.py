@@ -14,7 +14,7 @@ from sigkax import cpu_ops
 try:
     from sigkax import gpu_ops
 except ImportError:
-    gpu_ops == None
+    gpu_ops = None
 else:
     for name, value in gpu_ops.registrations().items():
         xla_client.register_custom_call_target(name, value, platform="gpu")
