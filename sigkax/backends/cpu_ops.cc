@@ -4,12 +4,12 @@
 using namespace sigkax;
 
 namespace
-{
-
+{   
+    
     template <typename T>
     void cpu_solve_pde(void *out, const void **in){
         
-        //parsing input
+        //parsing input. our XLA custom call should have signature as (int, int, array)
         const std::int64_t n_rows = *reinterpret_cast<const std::int64_t *>(in[0]);
         const std::int64_t n_cols = *reinterpret_cast<const std::int64_t *>(in[1]);
         const T *inc_mat = reinterpret_cast<const T *>(in[2]);
@@ -20,6 +20,7 @@ namespace
         solve_pde(inc_mat, sol_mat, n_rows, n_cols);
     }
 
+    // C++ function is encapsulated and exposed to Python via Pybind11
     pybind11::dict Registrations()
     {
         pybind11::dict dict;

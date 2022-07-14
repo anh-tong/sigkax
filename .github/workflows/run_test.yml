@@ -1,6 +1,6 @@
 # Continuous integration
 
-name: Python package
+name: CI
 
 on:
   push:

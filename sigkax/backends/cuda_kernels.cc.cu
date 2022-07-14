@@ -2,6 +2,16 @@
 #include "kernel_helpers.h"
 #include "cuda_kernel.h"
 
+/*
+Solve PDE
+
+    \partial^2 U / \partial s \partial t = <\dot{x}{\dot{y}}> U(s, t),
+
+with boundary conditions
+
+    U(0, \cdot) = U(\cdot, 0) = 1
+*/
+
 namespace sigkax
 {
 
@@ -9,18 +19,49 @@ namespace sigkax
     {
 
         template <typename T>
-        __global__ void set_boundary_condition(T *sol_arr, int n_rows, int n_cols){
-            if ((threadIdx.x <= n_rows) && (threadIdx.y <= n_cols)){
+        __global__ void set_boundary_condition(T *sol_arr, int n_rows, int n_cols)
+        {
+            /*
+            Boundary condition U(0, \cdot) = U(\cdot, 0) = 1.
+
+            This is a CUDA kernel, so setting the boundary is done parallelly.
+            Kernel invocation should set threads as (num_rows + 1, num_cols + 1)
+            Args:
+                sol_arr: array contains the solution of PDE
+                n_rows: number of rows
+                n_cols: number of columns
+
+            Returns:
+                No return but sol_arr is updated
+            */
+
+            if ((threadIdx.x <= n_rows) && (threadIdx.y <= n_cols))
+            {
                 sol_arr[threadIdx.x * (n_cols + 1)] = 1.;
                 sol_arr[threadIdx.y] = 1;
             }
             __syncthreads();
         }
 
-
         template <typename T>
         __global__ void solve_pde_kernel(const T *inc_arr, T *sol_arr, int n_rows, int n_cols, int n_anti_diags)
         {
+            /*
+            Perform the numerical step of solving PDE
+
+            The main key to accelerate computation here is that every entry on anti-diagonals can be updated parallelly GIVEN the previous anti-diagonal
+
+            Args:
+                inc_arr: increment matrix as C++ array size (n_rows, n_cols)
+                sol_arr: solution matrix as C++ array size (n_rows+1, n_cols+1)
+                n_rows: number of rows of the increment matrix
+                n_cols: number of row of the solution matrix
+                n_anti_diagonal: number of anti diagonals. Typically, set as 2*max(n_rows, n_cols) - 1
+
+            Return:
+                just update the solution matrix `sol_arr`
+            */
+
             int thread_id = threadIdx.x;
             int I = thread_id;
 
@@ -49,7 +90,7 @@ namespace sigkax
                     k10 = sol_arr[k10_idx];
 
                     // update solution matrix
-                    sol_arr[k11_idx] = (k01 + k10) * (1. + 0.5 *inc + pow(inc, 2) / 12.) - k00 * (1. - pow(inc, 2) / 12.);
+                    sol_arr[k11_idx] = (k01 + k10) * (1. + 0.5 * inc + pow(inc, 2) / 12.) - k00 * (1. - pow(inc, 2) / 12.);
 
                     // printf("(%d, %d): k00=%.2f, k01=%.2f, k10=%.2f, k11=%.2f \n", i, j, k00, k01, k10, sol_arr[k11_idx]);
                 }

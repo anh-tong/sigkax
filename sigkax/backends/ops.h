@@ -17,6 +17,9 @@ namespace sigkax
     template <typename T>
     SIGKAX_INLINE_OR_DEVICE void solve_pde(const T *inc_arr, T *sol_arr, const int n_rows, const int n_cols)
     {
+        /*
+        Solve PDE function. See more description in `sigkax/backends/cuda_kernels.cc.cu`
+        */
 
         const T(*inc_mat)[n_cols] = reinterpret_cast<const T(*)[n_cols]>(inc_arr);
         T(*sol_mat)[n_cols + 1] = reinterpret_cast<T(*)[n_cols + 1]>(sol_arr);

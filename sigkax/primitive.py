@@ -4,10 +4,10 @@ from platform import platform
 import numpy as np
 
 import jax.numpy as jnp
-from jax import core, dtypes
+from jax import core, dtypes, lax
 from jaxlib import xla_client
 from jax.abstract_arrays import ShapedArray
-from jax.interpreters import xla
+from jax.interpreters import xla, batching
 
 from sigkax import cpu_ops
 
@@ -83,6 +83,10 @@ def _solve_pde_translation(ctx,
         raise ValueError(
             f"Platform {platform} is not supported. It should be 'cpu' or 'gpu'")
 
+def solve_pde_batch(vector_arg_values, batch_axes):
+    assert batch_axes[0] == 0
+    res = lax.map(lambda x: solve_pde(*x), vector_arg_values)
+    return res, batch_axes[0]
 
 def solve_pde(inc_mat):
 
@@ -98,3 +102,4 @@ xla.backend_specific_translations["cpu"][_solve_pde_prim] = partial(
 
 xla.backend_specific_translations["gpu"][_solve_pde_prim] = partial(
     _solve_pde_translation, platform="gpu")
+batching.primitive_batchers[_solve_pde_prim] = solve_pde_batch

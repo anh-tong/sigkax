@@ -33,16 +33,10 @@ class BaseSigKernel(eqx.Module):
             xs: size (len_x, dim)
         """
 
-        
-        n, dim = xs.shape
-        m, _ = ys.shape
         assert dim == ys.shape[-1]
 
         K = self.static_kernel(xs, ys)
         K_diff = _diff(K)
-
-        # n_aug = (2**self.dyadic_order)*(n-1)
-        # m_aug = (2**self.dyadic_order)*(m-1)
         
         K_aug = _double_tile(K_diff, n=2**self.dyadic_order) / ((2**self.dyadic_order)**2)
             

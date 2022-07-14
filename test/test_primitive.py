@@ -22,8 +22,10 @@ def test_cpu_vs_gpu():
     
     assert np.allclose(np.array(output_cpu), np.array(output_gpu))
 
-@pytest.mark.skip(reason="not implemented yet")
 def test_batching():
     
     input = jnp.ones((4, 10, 20)) * 0.1
-    jax.vmap(solve_pde)(input)
+    output = jax.vmap(solve_pde)(input)
+    assert output.shape[0] == input.shape[0]
+    assert output.shape[1] == input.shape[1] + 1
+    assert output.shape[2] == input.shape[2] + 1
