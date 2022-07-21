@@ -1,6 +1,6 @@
 import jax.numpy as jnp
 
-from sigkax.utils import _repeat, finite_diff, flip_last_two
+from sigkax.utils import _repeat, finite_diff, flip_last_two, localized_impulse
 
 def test_repeat():
 
@@ -9,7 +9,7 @@ def test_repeat():
     expected = jnp.array([[[0., 0., 1., 1., 2., 2.],
                            [0., 0., 1., 1., 2., 2.],
                            [3., 3., 4., 4., 5., 5.],
-                           [3., 3., 4., 4., 5., 5.]]])
+                           [3., 3., 4., 4., 5., 5.]]])/2**2
     res = _repeat(x, n=2)
     jnp.allclose(expected, res)
 
@@ -37,6 +37,12 @@ def test_finite_diff():
     dyadic_order = 2
     res = finite_diff(x, dyadic_order=dyadic_order)
     jnp.allclose(expected, res)
+    
+def test_localized_impulse():
+    
+    x = jnp.ones((2,3))
+    output = localized_impulse(x)
+    assert output.shape == (6,3)
 
 # # just for generate test cases that match with PyTorch sigkernel
 # if __name__ == "__main__":
