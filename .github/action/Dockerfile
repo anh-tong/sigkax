@@ -7,4 +7,6 @@ RUN python3 -m pip install -U pip && \
 
 COPY entrypoint.sh /entrypoint.sh
 
+RUN chmod +x /entrypoint.sh
+
 ENTRYPOINT [ "/entrypoint.sh" ]
