@@ -8,21 +8,44 @@ from sigkax.utils import flip_last_two, _repeat, finite_diff, localized_impulse
 class BaseSigKernel(eqx.Module):
 
     dyadic_order: int
-    use_autodiff: bool = True
+    use_autodiff: bool = False  
     eps: float = 1e-4           # finite-difference
 
     def static_kernel(self, x, y):
         """Compute static kernel"""
         raise NotImplementedError
+    
+    def naive_kernel(self, x, y):
+        """Pure python implementation of signature kernel
+        WARNING: JAX jit suffers long compilation. DO NOT jit this function
+        """
+        K = self.static_kernel(x, y)
+        dot_kernel = finite_diff(K, dyadic_order=self.dyadic_order)
+        pde_sol = jnp.empty(shape=(dot_kernel.shape[0] + 1, dot_kernel.shape[1] + 1))
+        pde_sol = pde_sol.at[0,:].set(1.)
+        pde_sol = pde_sol.at[:,0].set(1.)
+        for i in range(dot_kernel.shape[0]):
+            for j in range(dot_kernel.shape[1]):
+                # print(i,j)
+                incr = dot_kernel[i,j]
+                k10 = pde_sol[i+1,j].copy()
+                k01 = pde_sol[i,j+1].copy()
+                k00 = pde_sol[i,j].copy()
+                
+                k11 = (k10 + k01) * (1. + 0.5 * incr + incr **2 / 12.) - k00 * (1 - incr**2/12)
+                
+                pde_sol = pde_sol.at[i+1, j+1].set(k11)
+                
+        return pde_sol[-1,-1]
 
-    def kernel(self, xs, ys):
+    def kernel(self, x, y):
         """
         
         Tutorial reference for build custom JVP in JAX:
             https://jax.readthedocs.io/en/latest/notebooks/Custom_derivative_rules_for_Python_code.html
         Args:
-            xs: size (batch_x, len_x, dim)
-            ys: size (batch_y, len_y, dim)
+            xs: size (len_x, dim). Use `jax.vmap` for batch inputs
+            ys: size (len_y, dim). Use `jax.vmap` for batch inputs
         """
         
         def _sub_routine(x, y):
@@ -37,30 +60,27 @@ class BaseSigKernel(eqx.Module):
             return pde_sol, kernel, dot_kernel
         
         @jax.custom_vjp
-        def _kernel(xs, ys):
-            
-            def _v_sub_routine(x):
-                return jax.vmap(lambda y: _sub_routine(x, y)[0])(ys)
-            
-            result = jax.vmap(_v_sub_routine)(xs)
-            
+        def _kernel(x, y):
+            pde_sol, _, _ = _sub_routine(x, y)
             # return PDE solution at T
-            return result[...,-1,-1]
+            return pde_sol[-1,-1]
         
-        def _fwd_fn(xs, ys):
+        # -------------------------------------------------------------
+        #                      Forward implementation
+        # -------------------------------------------------------------
+        def _fwd_fn(x, y):
             """
             Forward function do the same thing with the main function
             It can also return additional RESIDUALS for further computation in backward pass
             In PyTorch, such residuals are passed via `ctx` of `torch.autograd.Function` 
             """
-            
-            def _v_sub_routine(x):
-                return jax.vmap(lambda y: _sub_routine(x, y))(ys)
-            
-            pde_sol, kernel, dot_kernel = jax.vmap(_v_sub_routine)(xs)
-            res = (xs, ys, kernel, dot_kernel, pde_sol)
-            return pde_sol[...,-1,-1], res
-            
+            pde_sol, kernel, dot_kernel = _sub_routine(x, y)
+            res = (x, y, kernel, dot_kernel, pde_sol)
+            return pde_sol[-1,-1], res
+        
+        # -------------------------------------------------------------
+        #                      Backward implementation
+        # -------------------------------------------------------------
         def _bwd_fn(res, g):
             """
             Backward function should return the same PyTree structure like the input function
@@ -68,25 +88,24 @@ class BaseSigKernel(eqx.Module):
             should return a tuple of two tensors having the same shape with `xs` and `ys`.
             """
             
-            xs, ys, kernel, forward_vf, forward_sol = res
-            
-            batch_x, batch_y = xs.shape[0], ys.shape[0]
-            len_x, len_y = xs.shape[1], ys.shape[1]
-            dim = xs.shape[-1]
+            x, y, kernel, forward_vf, forward_sol = res
             
             # backward vector field is flipped then solve backward PDE
             backward_vf = flip_last_two(forward_vf)
-            backward_sol = jax.vmap(jax.vmap(solve_pde))(backward_vf)         # TODO: whether to use double vmap or implement in C++
+            backward_sol = solve_pde(backward_vf) 
             backward_sol = flip_last_two(backward_sol)
             
-            batch_vf = forward_sol[..., :-1, :-1] * backward_sol[...,1:,1:]
-            
+            vf = forward_sol[:-1, :-1] * backward_sol[1:,1:]    
             
             def _get_grad(x, y, vf, kernel=None):
                 """
+                This follows Theorem 4.1 of SigGPE paper
                 Args:
                     x: size (len_x, dim)
-                    y: size (len_y, dim)
+                    y: size (len_y, dim)n
+                    
+                    vf: size ((len_x - 1) * 2^dyadic_order, (len_y - 1) * 2^dyadic_order)
+                    kernel: size (len_x, len_y)
                 Return 
                     size (len_x, dim)
                 """
@@ -95,15 +114,15 @@ class BaseSigKernel(eqx.Module):
                 def _f_eps(h):
                     
                     # localized impulse: each pair of (data point, dimension) is added with a small difference
-                    new_x = localized_impulse(x)
+                    new_x = localized_impulse(x, h)
                     new_kernel = self.static_kernel(new_x, y)
                     new_kernel = new_kernel.reshape((len_x, dim, -1))
                     new_kernel = new_kernel.transpose((1, 0, 2))
-                    diff = jnp.diff(new_kernel, axis=-1)
                     if kernel is not None:
                         # finite difference method
-                        diff = diff - jnp.expand_dims(jnp.diff(kernel, axis=-1),
-                                                    axis=0)
+                        diff = jnp.diff(new_kernel, axis=-1) - \
+                            jnp.expand_dims(jnp.diff(kernel, axis=-1),
+                                            axis=0)
                     diff_1 = diff[:,1:,:]
                     diff_2 = diff[:,1:,:] - diff[:,:-1,:]
                     diff_1 = _repeat(diff_1, n=2**self.dyadic_order)
@@ -118,14 +137,18 @@ class BaseSigKernel(eqx.Module):
                     """The case of finite-difference"""
                     eval_1, eval_2 = _f_eps(self.eps)
                     grad_1, grad_2 = eval_1 / self.eps, eval_2 / self.eps
+                    import pdb
+                    pdb.set_trace()
                 else:
-                    """Use JVP"""
+                    """Use JVP
+                    This seems slow
+                    """
                     _, (grad_1, grad_2) = jax.jvp(_f_eps, (0., ), (1., ))
                     
                 grad_1 = grad_1.sum(axis=-1)
-                grad_1 = grad_1.reshape((len_x-1, -1, dim)).sum(axis=1)
+                grad_1 = grad_1.reshape((dim, len_x-1, -1)).sum(axis=-1).T
                 grad_2 = grad_2.sum(axis=-1)
-                grad_2 = grad_2.reshape((len_x-1, -1, dim)).sum(axis=1)
+                grad_2 = grad_2.reshape((dim, len_x-1, -1)).sum(axis=-1).T
                 
                 grad_incr = grad_2[1:,:] - jnp.diff(grad_1, axis=0)
                 start = jnp.expand_dims(grad_2[0,:] - grad_1[0,:], axis=0)
@@ -135,47 +158,29 @@ class BaseSigKernel(eqx.Module):
                 return grad_points
             
             if self.use_autodiff:
-                
+                # # use JAX JVP auto-diff
                 # w.r.t x
-                def _get_grad_batch_y(x, vf):
-                    return jax.vmap(lambda _y, _vf: _get_grad(x, _y, vf=_vf, kernel=None))(ys, vf)
-                _get_grad_batch_xy = jax.vmap(_get_grad_batch_y)
-                grad_x = _get_grad_batch_xy(xs, batch_vf)
-                grad_x = jnp.expand_dims(g, axis=(-1, -2)) * grad_x
-                grad_x = grad_x.sum(axis=1)
-                
+                grad_x = _get_grad(x, y, vf)
                 # w.r.t y
-                def _get_grad_batch_y(x, vf):
-                    return jax.vmap(lambda _y, _vf: _get_grad(x, _y, vf=_vf, kernel=None))(xs, vf)
-                _get_grad_batch_xy = jax.vmap(_get_grad_batch_y)
-                grad_y = _get_grad_batch_xy(ys, batch_vf.transpose((1,0,3,2)))
-                grad_y = jnp.expand_dims(g, axis=(-1, -2)) * grad_y
-                grad_y = grad_y.sum(axis=1)
+                grad_y = _get_grad(y, x, vf.T)
+                
                 return (grad_x, grad_y)
             else:
-                # -------
-                #  NEW
-                # -------
-                def _get_grad_batch_y(x, vf, kernel):
-                    return jax.vmap(lambda _y, _vf, _kernel: _get_grad(x, _y, _vf, _kernel))(ys, vf, kernel)
-                _get_grad_batch_xy = jax.vmap(_get_grad_batch_y)
-                grad_x = _get_grad_batch_xy(xs, batch_vf, kernel)
-                grad_x = jnp.expand_dims(g, axis=(-1, -2)) * grad_x
-                grad_x = grad_x.sum(axis=1)
-                
+                # # use finite-difference method
+                # w.r.t x
+                grad_x = _get_grad(x, y, vf, kernel)
+
                 # w.r.t y
-                def _get_grad_batch_y(x, vf, kernel):
-                    return jax.vmap(lambda _y, _vf, _kernel: _get_grad(x, _y, _vf, _kernel))(xs, vf, kernel)
-                _get_grad_batch_xy = jax.vmap(_get_grad_batch_y)
-                grad_y = _get_grad_batch_xy(ys, batch_vf.transpose((1,0,3,2)), kernel.transpose((1,0, 3, 2)))
-                grad_y = jnp.expand_dims(g, axis=(-1, -2)) * grad_y
-                grad_y = grad_y.sum(axis=1)
-                return (grad_x, grad_y)
+                grad_y = _get_grad(y, x, vf.T, kernel.T)
+            
+            grad_x = g * grad_x
+            grad_y = g * grad_y
+            return (grad_x, grad_y)
             
         # register VJP here
         _kernel.defvjp(_fwd_fn, _bwd_fn)
         
-        return _kernel(xs, ys)
+        return _kernel(x, y)
         
                 
 def _exp_quadratic(x, y):
@@ -190,39 +195,69 @@ def cov_map(cov_fn, xs, ys=None):
     
 class RBFSigKernel(BaseSigKernel):
     
+    log_scale: jnp.ndarray
+    log_length_scale: jnp.ndarray
+    
+    def __init__(self, log_scale, log_length_scale, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.log_length_scale = log_length_scale
+        self.log_scale = log_scale
+    
     def static_kernel(self, x, y):
-        return cov_map(_exp_quadratic, x, y)
+        scale = jnp.exp(self.log_scale)
+        length_scale = jnp.exp(self.log_length_scale)
+        return scale * cov_map(_exp_quadratic, x/length_scale, y/length_scale)
     
     
-if __name__ == "__main__":
-    import jax.random as jrandom
+# if __name__ == "__main__":
+#     import jax.random as jrandom
+#     import time
+#     jax.config.update('jax_disable_jit', True)
+#     jax.config.update('jax_platform_name', "cpu")
+#     dyadic_order = 3
+#     batch_x, batch_y = 1, 2
+#     len_x, len_y = 5, 6
+#     dim = 3
+#     xs = jrandom.normal(key=jrandom.PRNGKey(0), shape=(batch_x, len_x, dim))
+#     ys = jrandom.normal(key=jrandom.PRNGKey(1), shape=(batch_y, len_y, dim))
+#     xs /= jnp.max(xs)
+#     ys /= jnp.max(ys)
     
-    jax.config.update('jax_disable_jit', True)
-    jax.config.update('jax_platform_name', "cpu")
+#     # xs = jnp.array([[[0., 3., 5.],
+#     #                  [3., 4., 5.]]]) / 5.
+#     # ys = jnp.array([[[0., 4., 8.],
+#     #                  [6., 5., 10.]]]) /10.
     
-    batch_x, batch_y = 2, 3
-    len_x, len_y = 3, 4
-    dim = 2
-    # xs = jrandom.normal(key=jrandom.PRNGKey(0), shape=(batch_x, len_x, dim))
-    # ys = jrandom.normal(key=jrandom.PRNGKey(1), shape=(batch_y, len_y, dim))
+#     sk = RBFSigKernel(log_scale=jnp.array(0.),
+#                       log_length_scale=jnp.array(0.),
+#                       dyadic_order=dyadic_order,
+#                       use_autodiff=False) 
     
-    xs = jnp.array([[[0., 1., 2.],
-                     [3., 4., 5.]]]) / 5.
-    ys = jnp.array([[[0., 2., 4.],
-                     [6., 8., 10.]]]) /10.
+#     def func_no_pde(a):
+#         def _batch_y(x):
+#             return jax.vmap(lambda _y: sk.naive_kernel(x, _y))(ys)
+#         return jnp.sum(jax.vmap(_batch_y)(xs*a))
     
-    sk = RBFSigKernel(dyadic_order=5, use_autodiff=False)    
-   
-    def func(a):
-        return jnp.sum(sk.kernel(xs*a, ys*a))
-    # it fails gradient check of JAX
-    # func = jax.jit(func, backend="cpu")
-    a = 0.5
-    func(a)
-    our_grad =  jax.grad(func)(a)
-    print(our_grad)
-    eps = 1e-4
-    numerical_grad = (func(a + eps / 2.) - func(a- eps / 2.))/eps
-    print(numerical_grad)    
+#     def func(a):
+#         def _batch_y(x):
+#             return jax.vmap(lambda _y: sk.kernel(x, _y))(ys)
+#         return jnp.sum(jax.vmap(_batch_y)(xs*a))
+#     a = 1.
+#     start = time.time()
+#     print(func(a))
+#     print("evaluate = {}".format(time.time() - start))
+#     start = time.time()
+#     our_grad =  jax.grad(func)(a)
+#     print("compute grad time = {}".format(time.time() - start))
+#     print(our_grad)
+#     eps = 1e-5
+#     numerical_grad = (func(a + eps / 2.) - func(a- eps / 2.))/eps
+#     print(numerical_grad)    
+    
+#     start = time.time()
+#     print("evaluate no PDE = {}".format(time.time() - start))
+#     start = time.time()
+#     no_pde_grad = jax.grad(func_no_pde)(a)
+#     print(no_pde_grad)
    
     
