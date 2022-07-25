@@ -56,24 +56,6 @@ def _solve_pde_translation(ctx, inc_mat, *, platform="cpu"):
                     Please check if the system support CUDA"
             )
 
-        # if the matrix too big, fall back to CPU
-        if max(dims[0], dims[1]) >= 1024:
-            return xla_client.ops.CustomCallWithLayout(
-                ctx,
-                cpu_op_name,
-                operands=(
-                    xla_client.ops.ConstantLiteral(ctx, dims[0]),
-                    xla_client.ops.ConstantLiteral(ctx, dims[1]),
-                    inc_mat,
-                ),
-                operand_shapes_with_layout=(
-                    xla_client.Shape.array_shape(np.dtype(np.int64), (), ()),
-                    xla_client.Shape.array_shape(np.dtype(np.int64), (), ()),
-                    input_shape,
-                ),
-                shape_with_layout=output_shape,
-            )
-
         opaque = gpu_ops.build_sigkax_descriptor(dims[0], dims[1])
         return xla_client.ops.CustomCallWithLayout(
             ctx,

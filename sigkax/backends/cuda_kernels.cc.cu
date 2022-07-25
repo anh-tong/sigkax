@@ -35,10 +35,10 @@ namespace sigkax
                 No return but sol_arr is updated
             */
 
-            if ((threadIdx.x <= n_rows) && (threadIdx.y <= n_cols))
+            if ((threadIdx.x <= n_rows) && (blockIdx.x <= n_cols))
             {
                 sol_arr[threadIdx.x * (n_cols + 1)] = 1.;
-                sol_arr[threadIdx.y] = 1;
+                sol_arr[blockIdx.x] = 1;
             }
             __syncthreads();
         }
@@ -118,8 +118,9 @@ namespace sigkax
             T *sol_arr = reinterpret_cast<T *>(buffers[1]);
 
             // invoke kernel to set boundary condition
-            dim3 thread_per_block_1(n_rows + 1, n_cols + 1);
-            set_boundary_condition<T><<<1, thread_per_block_1, 0, stream>>>(sol_arr, n_rows, n_cols);
+            dim3 thread_per_block_1(n_rows + 1, 1);
+            dim3 num_block(n_cols, 1);
+            set_boundary_condition<T><<<num_block, thread_per_block_1, 0, stream>>>(sol_arr, n_rows, n_cols);
 
             // allocate GPU resource here. How to do this automatically?
             dim3 thread_per_block(n_anti_diags, 1); // threadIdx.x, threadIdx.y

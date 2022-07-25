@@ -5,7 +5,6 @@ from sigkax.kernel import RBFSigKernel
 
 
 jax.config.update("jax_enable_x64", True)
-jax.config.update("jax_platform_name", "cpu")  # TODO: test with GPU
 
 
 def test_rbf():
