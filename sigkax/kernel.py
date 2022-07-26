@@ -44,6 +44,18 @@ class BaseSigKernel(eqx.Module):
 
         return pde_sol[-1, -1]
 
+    def batch_kernel(self, xs, ys):
+        """
+        Args:
+            xs : size (batch_x, len_x, dim)
+            ys : size (batch_y, len_y, dim)
+        """
+
+        def _batch_y(x):
+            return jax.vmap(lambda _y: self.kernel(x, _y))(ys)
+
+        return jax.vmap(_batch_y)(xs)
+
     def kernel(self, x, y):
         """
 
