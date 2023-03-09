@@ -25,7 +25,7 @@ def test_rbf():
         use_autodiff=False,
     )
 
-    # do not jit this function
+    @jax.jit
     def func_no_pde(a):
         def _batch_y(x):
             return jax.vmap(lambda _y: sk.naive_kernel(x, _y))(ys * a)

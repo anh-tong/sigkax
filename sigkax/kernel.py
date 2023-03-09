@@ -16,9 +16,7 @@ class BaseSigKernel(eqx.Module):
         raise NotImplementedError
 
     def naive_kernel(self, x, y):
-        """Pure python implementation of signature kernel
-        WARNING: JAX jit suffers long compilation. DO NOT jit this function
-        """
+        """Pure JAX implementation of signature kernel"""
         K = self.static_kernel(x, y)
         dot_kernel = finite_diff(K, dyadic_order=self.dyadic_order)
         pde_sol = jnp.empty(
@@ -29,18 +27,28 @@ class BaseSigKernel(eqx.Module):
         )
         pde_sol = pde_sol.at[0, :].set(1.0)
         pde_sol = pde_sol.at[:, 0].set(1.0)
-        for i in range(dot_kernel.shape[0]):
-            for j in range(dot_kernel.shape[1]):
-                # print(i,j)
-                incr = dot_kernel[i, j]
-                k10 = pde_sol[i + 1, j].copy()
-                k01 = pde_sol[i, j + 1].copy()
-                k00 = pde_sol[i, j].copy()
 
-                k11 = (k10 + k01) * (1.0 + 0.5 * incr + incr**2 / 12.0)
-                k11 -= k00 * (1 - incr**2 / 12)
+        def f(ij, value):
+            i = ij // dot_kernel.shape[0]
+            j = ij % dot_kernel.shape[0]
+            incr = dot_kernel[i, j]
+            k10 = value[i + 1, j]
+            k01 = value[i, j + 1]
+            k00 = value[i, j]
 
-                pde_sol = pde_sol.at[i + 1, j + 1].set(k11)
+            k11 = (k10 + k01) * (1.0 + 0.5 * incr + incr**2 / 12.0)
+            k11 -= k00 * (1 - incr**2 / 12)
+
+            value = value.at[i + 1, j + 1].set(k11)
+
+            return value
+
+        pde_sol = jax.lax.fori_loop(
+            lower=0,
+            upper=dot_kernel.shape[0] * dot_kernel.shape[1],
+            body_fun=f,
+            init_val=pde_sol,
+        )
 
         return pde_sol[-1, -1]
 
